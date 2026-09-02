@@ -1,3 +1,4 @@
+import os
 import telebot
 import requests
 from collections import defaultdict
@@ -7,10 +8,9 @@ from datetime import datetime
 BOT_TOKEN = "8984876119:AAFjSWUd4RFCfMSmsVUFRJEWQULaUQlcCDc"
 FIREBASE_URL = "https://channel-searcher-d899d-default-rtdb.firebaseio.com/"
 
-GEMINI_API_KEYS = [
-    "AQ.Ab8RN6LxmyOKib8i9MCBcYUZ_Sa13AqqPXiY23oxPQQ4MR7mmA",
-  
-]
+# ከ Railway Environment Variable የሰጠዝናቸውን 33ቱንም ኪዎች በራስ ሰር በኮማ እየነጠለ ይወስዳል
+raw_keys = os.environ.get("GEMINI_API_KEYS", "AQ.Ab8RN6LxmyOKib8i9MCBcYUZ_Sa13AqqPXiY23oxPQQ4MR7mmA")
+GEMINI_API_KEYS = [key.strip() for key in raw_keys.split(",") if key.strip()]
 
 current_key_index = 0
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
@@ -18,6 +18,8 @@ user_histories = defaultdict(list)
 
 def get_next_api_key():
     global current_key_index
+    if not GEMINI_API_KEYS:
+        return ""
     key = GEMINI_API_KEYS[current_key_index]
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     return key
@@ -108,7 +110,9 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
     headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        if not api_key:
+            continue
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
             if response.status_code == 200:
@@ -175,7 +179,9 @@ def chat(message):
     headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        if not api_key:
+            continue
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=15)
             if res.status_code == 200:
@@ -187,7 +193,7 @@ def chat(message):
     bot.send_message(message.chat.id, "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️")
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Firebase & 33 Keys Connected)")
+print("🤖 MELU BOT STARTED (Firebase & Environment API Keys Connected)")
 print("=" * 45)
 
 while True:
