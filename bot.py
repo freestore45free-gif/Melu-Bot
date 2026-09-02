@@ -194,7 +194,7 @@ def chat(message):
     bot.send_message(message.chat.id, "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️")
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Firebase & Bearer Tokens Connected)")
+print("🤖 MELU BOT STARTED (Firebase & Bearer Auth Connected)")
 print("=" * 45)
 
 while True:
