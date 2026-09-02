@@ -8,7 +8,6 @@ from datetime import datetime
 BOT_TOKEN = "8984876119:AAFjSWUd4RFCfMSmsVUFRJEWQULaUQlcCDc"
 FIREBASE_URL = "https://channel-searcher-d899d-default-rtdb.firebaseio.com/"
 
-# ከ Railway Environment Variable የሰጠዝናቸውን 33ቱንም ኪዎች በራስ ሰር በኮማ እየነጠለ ይወስዳል
 raw_keys = os.environ.get("GEMINI_API_KEYS", "AQ.Ab8RN6LxmyOKib8i9MCBcYUZ_Sa13AqqPXiY23oxPQQ4MR7mmA")
 GEMINI_API_KEYS = [key.strip() for key in raw_keys.split(",") if key.strip()]
 
@@ -112,15 +111,17 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         api_key = get_next_api_key()
         if not api_key:
             continue
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
+            print(f"Gemini Image Response Status: {response.status_code} - {response.text[:150]}")
             if response.status_code == 200:
                 data = response.json()
                 answer = data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text")
                 if answer:
                     return answer.strip()
-        except:
+        except Exception as e:
+            print("Gemini Image Error:", e)
             continue
     return "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️"
 
@@ -136,7 +137,8 @@ def handle_photos(message):
         caption = message.caption or "እባክህ ይህንን ስክሪንሾት ተመልክተህ አግዘኝ።"
         answer = ask_gemini_with_image(user_id, user_name, caption, downloaded_file)
         bot.send_message(message.chat.id, answer)
-    except:
+    except Exception as e:
+        print("Photo Handler Error:", e)
         bot.send_message(message.chat.id, "ውዴ 😅 ስክሪንሾቱን መቀበል አልቻልኩም፣ እንደገና ላክልኝ ❤️")
 
 @bot.message_handler(func=lambda message: True)
@@ -181,14 +183,16 @@ def chat(message):
         api_key = get_next_api_key()
         if not api_key:
             continue
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=15)
+            print(f"Gemini Chat Response Status: {res.status_code} - {res.text[:150]}")
             if res.status_code == 200:
                 answer = res.json().get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text")
                 if answer:
                     return bot.send_message(message.chat.id, answer.strip())
-        except:
+        except Exception as e:
+            print("Gemini Chat Error:", e)
             continue
     bot.send_message(message.chat.id, "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️")
 
@@ -199,5 +203,6 @@ print("=" * 45)
 while True:
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=30, skip_pending=True)
-    except:
+    except Exception as e:
+        print("Polling Error:", e)
         time.sleep(3)
