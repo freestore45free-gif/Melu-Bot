@@ -8,7 +8,7 @@ from datetime import datetime
 BOT_TOKEN = "8984876119:AAFjSWUd4RFCfMSmsVUFRJEWQULaUQlcCDc"
 FIREBASE_URL = "https://channel-searcher-d899d-default-rtdb.firebaseio.com/"
 
-raw_keys = os.environ.get("GEMINI_API_KEYS", "AQ.Ab8RN6LxmyOKib8i9MCBcYUZ_Sa13AqqPXiY23oxPQQ4MR7mmA")
+raw_keys = os.environ.get("GEMINI_API_KEYS", "")
 GEMINI_API_KEYS = [key.strip() for key in raw_keys.split(",") if key.strip()]
 
 current_key_index = 0
@@ -106,12 +106,13 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    headers = {"Content-Type": "application/json"}
-    for _ in range(len(GEMINI_API_KEYS)):
-        api_key = get_next_api_key()
-        if not api_key:
-            continue
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
+    for _ in range(len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1):
+        token = get_next_api_key()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}" if token else ""
+        }
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
             if response.status_code == 200:
@@ -175,12 +176,13 @@ def chat(message):
     system_instruction = f"አንቺ ሜሉ ነሽ። የ @FreeStoreChannel ረዳት ነሽ። የቅርብ ጊዜ መረጃዎች: {files_context}"
     payload = {"contents": [{"parts": [{"text": f"{system_instruction}\n\nታሪክ:\n{context_history}"}]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}}
     
-    headers = {"Content-Type": "application/json"}
-    for _ in range(len(GEMINI_API_KEYS)):
-        api_key = get_next_api_key()
-        if not api_key:
-            continue
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
+    for _ in range(len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1):
+        token = get_next_api_key()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}" if token else ""
+        }
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=15)
             if res.status_code == 200:
@@ -192,7 +194,7 @@ def chat(message):
     bot.send_message(message.chat.id, "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️")
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Firebase & Environment API Keys Connected)")
+print("🤖 MELU BOT STARTED (Firebase & Bearer Tokens Connected)")
 print("=" * 45)
 
 while True:
