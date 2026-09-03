@@ -131,7 +131,10 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
                 answer = data["candidates"][0]["content"]["parts"][0]["text"]
                 if answer:
                     return answer.strip()
-        except Exception:
+            else:
+                print(f"Gemini API Error ({response.status_code}):", response.text)
+        except Exception as e:
+            print("Request Exception:", e)
             continue
     return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
 
@@ -170,7 +173,10 @@ def ask_gemini(user_id, user_name, text):
                 answer = data["candidates"][0]["content"]["parts"][0]["text"]
                 if answer:
                     return answer.strip()
-        except Exception:
+            else:
+                print(f"Gemini API Error ({response.status_code}):", response.text)
+        except Exception as e:
+            print("Request Exception:", e)
             continue
     return "ውዴ 😅 ሀሳቤን መግለጽ አልቻልኩም፣ እስቲ እንደገና አነጋግረኝ ❤️"
 
@@ -229,7 +235,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (GitHub Secrets & Comma Support)")
+print("🤖 MELU BOT STARTED (Error Logging Enabled)")
 print("=" * 45)
 
 while True:
