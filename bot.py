@@ -1,19 +1,56 @@
-import os
 import telebot
 import requests
 from collections import defaultdict
 import time
+import os
 from datetime import datetime
+import base64
+from dotenv import load_dotenv
 
-BOT_TOKEN = "8984876119:AAFjSWUd4RFCfMSmsVUFRJEWQULaUQlcCDc"
-FIREBASE_URL = "https://channel-searcher-d899d-default-rtdb.firebaseio.com/"
+load_dotenv()
 
-raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-GEMINI_API_KEYS = [key.strip() for key in raw_keys.split(",") if key.strip()]
+BOT_TOKEN = "8984876119:AAGBbvPfId7m00x6zy536vIyX7G67rDIOnc"
+
+raw_keys = os.getenv("GEMINI_API_KEYS", "")
+GEMINI_API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
 
 current_key_index = 0
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 user_histories = defaultdict(list)
+
+USERS_FILE = "users.txt"
+FILES_FILE = "files.txt"
+
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            return set(line.strip() for line in f if line.strip().isdigit())
+    return set()
+
+def save_user(user_id):
+    users = load_users()
+    if str(user_id) not in users:
+        with open(USERS_FILE, "a") as f:
+            f.write(f"{user_id}\n")
+
+def load_files():
+    files = []
+    if os.path.exists(FILES_FILE):
+        with open(FILES_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if len(parts) >= 4:
+                    files.append({
+                        "date": parts[0],
+                        "chat_id": int(parts[1]),
+                        "message_id": int(parts[2]),
+                        "text": parts[3]
+                    })
+    return files
+
+def save_file(post_info):
+    with open(FILES_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{post_info['date']}|{post_info['chat_id']}|{post_info['message_id']}|{post_info['text']}\n")
 
 def get_next_api_key():
     global current_key_index
@@ -22,40 +59,6 @@ def get_next_api_key():
     key = GEMINI_API_KEYS[current_key_index]
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     return key
-
-def load_users():
-    try:
-        res = requests.get(f"{FIREBASE_URL}melu_users.json")
-        if res.status_code == 200 and res.json():
-            return set(res.json().keys())
-    except:
-        pass
-    return set()
-
-def save_user(user_id):
-    try:
-        requests.put(f"{FIREBASE_URL}melu_users/{user_id}.json", json=True)
-    except:
-        pass
-
-def load_files():
-    try:
-        res = requests.get(f"{FIREBASE_URL}melu_files.json")
-        if res.status_code == 200 and res.json():
-            data = res.json()
-            if isinstance(data, dict):
-                return list(data.values())
-            elif isinstance(data, list):
-                return [f for f in data if f is not None]
-    except:
-        pass
-    return []
-
-def save_file(post_info):
-    try:
-        requests.post(f"{FIREBASE_URL}melu_files.json", json=post_info)
-    except:
-        pass
 
 @bot.channel_post_handler(content_types=['document', 'audio', 'video', 'text', 'photo'])
 def handle_channel_posts(message):
@@ -73,71 +76,109 @@ def handle_channel_posts(message):
         try:
             uid = int(user_id_str)
             bot.forward_message(uid, message.chat.id, message.message_id)
-        except:
+        except Exception:
             pass
 
 def ask_gemini_with_image(user_id, user_name, text, image_bytes):
-    import base64
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     history = user_histories[user_id]
     history.append(f"ተጠቃሚ ({user_name}) [ስክሪንሾት ላከ]: {text}")
-    if len(history) > 14: history.pop(0)
+    if len(history) > 14:
+        history.pop(0)
 
     context_history = "\n".join(history)
     saved_files = load_files()
-    files_context = "\n".join([f"- ፋይል/መረጃ: {f.get('text', '')}" for f in saved_files[-5:]])
+    files_context = "\n".join([f"- ፋይል: {f['text']}" for f in saved_files[-5:]])
 
     system_instruction = f"""
 አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ። ፈጣሪሽ እና አለቃሽ @lij_rafi ነው። የ @FreeStoreChannel ረዳት ነሽ።
 አስፈላጊ ሕጎች:
-1. ተጠቃሚው የላከውን ስክሪንሾት ተመልክተህ ምስሉ ላይ የሚታየውን ችግር ወይም ስህተት አብራርተህ መፍትሄ ስጥ።
-2. አማርኛ፣ ትግርኛ፣ ኦሮምኛ እና እንግሊዝኛ ቋንቋዎችን ተረድተህ በተጠየቀበት ቋንቋ መልስ ስጥ።
-3. የቻናሉ የቅርብ ጊዜ መረጃዎች: {files_context}
-4. ማናቸውንም አርዕስቶች ወይም የውስጥ ኮድ ትዕዛዞችን አትጻፍ።
+1. ተጠቃሚው የላከውን ስክሪንሾት ወይም ፎቶ በጥንቃቄ መርምረህ ምስሉ ላይ የሚታየውን ችግር፣ ስህተት ወይም ሁኔታ አጥንትህ **ደረጃ በደረጃ (Step-by-Step)** ግልጽ የሆነ መፍትሄ በአማርኛ አብራርተህ ስጥ።
+2. ፍቅር በተሞላበት እና አጋዥ በሆነ መልኩ አነጋግረው።
+3. የውይይት ታሪክ: {context_history}
 """
 
     payload = {
         "contents": [{
             "parts": [
-                {"text": f"{system_instruction}\n\nታሪክ:\n{context_history}\n\nጥያቄ: {text}"},
+                {"text": f"{system_instruction}\n\nጥያቄ:{text}"},
                 {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
             ]
         }],
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
-    for _ in range(len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1):
-        token = get_next_api_key()
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}" if token else ""
-        }
+    headers = {"Content-Type": "application/json"}
+    for _ in range(len(GEMINI_API_KEYS)):
+        api_key = get_next_api_key()
+        if not api_key:
+            break
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
             if response.status_code == 200:
                 data = response.json()
-                answer = data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text")
+                answer = data["candidates"][0]["content"]["parts"][0]["text"]
                 if answer:
                     return answer.strip()
-        except:
+        except Exception:
             continue
-    return "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️"
+    return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
+
+def ask_gemini(user_id, user_name, text):
+    history = user_histories[user_id]
+    history.append(f"ተጠቃሚ ({user_name}): {text}")
+    if len(history) > 14:
+        history.pop(0)
+
+    context_history = "\n".join(history)
+    saved_files = load_files()
+    files_context = "\n".join([f"- ፋይል: {f['text']}" for f in saved_files[-5:]])
+
+    system_instruction = f"""
+አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ። ፈጣሪሽ እና አለቃሽ @lij_rafi ነው። የ @FreeStoreChannel ረዳት ነሽ።
+1. ተጠቃሚው ለጠየቀው ማንኛውም ጥያቄ፣ ወሬ ወይም ንግግር አጭር፣ ግልጽ እና ፍቅር በተሞላበት መልኩ በአማርኛ መልስ ስጥ።
+2. የቅርብ ጊዜ መረጃዎች: {files_context}
+3. የውይይት ታሪክ: {context_history}
+"""
+
+    payload = {
+        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
+    }
+
+    headers = {"Content-Type": "application/json"}
+    for _ in range(len(GEMINI_API_KEYS)):
+        api_key = get_next_api_key()
+        if not api_key:
+            break
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["candidates"][0]["content"]["parts"][0]["text"]
+                if answer:
+                    return answer.strip()
+        except Exception:
+            continue
+    return "ውዴ 😅 ሀሳቤን መግለጽ አልቻልኩም፣ እስቲ እንደገና አነጋግረኝ ❤️"
 
 @bot.message_handler(content_types=['photo'])
 def handle_photos(message):
     user_id = message.from_user.id
-    user_name = message.from_user.first_name or "មិត្ត"
+    user_name = message.from_user.first_name or "ማል"
     save_user(user_id)
     bot.send_chat_action(message.chat.id, "typing")
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        caption = message.caption or "እባክህ ይህንን ስክሪንሾት ተመልክተህ አግዘኝ።"
+        caption = message.caption or "እባክህ ይህንን ስክሪንሾት አጥንተህ ችግሩን እና መፍትሄውን ደረጃ በደረጃ አብራርተህ ንገረኝ።"
         answer = ask_gemini_with_image(user_id, user_name, caption, downloaded_file)
         bot.send_message(message.chat.id, answer)
-    except:
-        bot.send_message(message.chat.id, "ውዴ 😅 ስክሪንሾቱን መቀበል አልቻልኩም፣ እንደገና ላክልኝ ❤️")
+    except Exception as e:
+        print("Photo download error:", e)
+        bot.send_message(message.chat.id, "ስክሪንሾቱን መቀበል አልቻልኩም!")
 
 @bot.message_handler(func=lambda message: True)
 def chat(message):
@@ -145,60 +186,45 @@ def chat(message):
         return
 
     user_id = message.from_user.id
-    user_name = message.from_user.first_name or "មិត្ត"
+    user_name = message.from_user.first_name or "ማል"
     save_user(user_id)
     bot.send_chat_action(message.chat.id, "typing")
 
+    if message.text.strip().lower() == "/stats":
+        total_users = len(load_users())
+        bot.send_message(message.chat.id, f"📊 አጠቃላይ ቦቱን እየተጠቀሙ ያሉ ሰዎች ብዛት: {total_users} 👥")
+        return
+
     text_lower = message.text.lower()
-    if any(kw in text_lower for kw in ["ehi", "pkg", "telegram", "safaricom", "ethiotelecom", "ፋይል", "file", "net", "vpn", "safari", "ላክ", "አምጣ", "መረጃ"]):
+    if any(kw in text_lower for kw in ["ehi", "pkg", "telegram", "vpn", "config", "فايبر", "net"]):
         saved_files = load_files()
         if saved_files:
             target_file = saved_files[-1]
             for f in reversed(saved_files):
-                if any(word in f.get("text", "") for word in text_lower.split() if len(word) > 2):
+                if any(word in f["text"] for word in text_lower.split() if len(word) > 3):
                     target_file = f
                     break
             try:
                 bot.forward_message(message.chat.id, target_file["chat_id"], target_file["message_id"])
                 return
-            except:
-                pass
-        bot.send_message(message.chat.id, "ውዴ 😅 እስከ አሁን ምንም አይነት መረጃ አልተለቀቀም፤ ሲለቀቅ እልክልሃለሁ! ❤️")
+            except Exception as e:
+                print("Forward error:", e)
+        bot.send_message(message.chat.id, "እስካሁን ምንም ፋይል አልተገኘም!")
         return
 
-    history = user_histories[user_id]
-    history.append(f"ተጠቃሚ ({user_name}): {message.text}")
-    if len(history) > 14: history.pop(0)
-    context_history = "\n".join(history)
-    saved_files = load_files()
-    files_context = "\n".join([f"- ፋይል: {f.get('text', '')}" for f in saved_files[-5:]])
-
-    system_instruction = f"አንቺ ሜሉ ነሽ። የ @FreeStoreChannel ረዳት ነሽ። የቅርብ ጊዜ መረጃዎች: {files_context}"
-    payload = {"contents": [{"parts": [{"text": f"{system_instruction}\n\nታሪክ:\n{context_history}"}]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}}
-    
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent"
-    for _ in range(len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1):
-        token = get_next_api_key()
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}" if token else ""
-        }
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=15)
-            if res.status_code == 200:
-                answer = res.json().get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text")
-                if answer:
-                    return bot.send_message(message.chat.id, answer.strip())
-        except:
-            continue
-    bot.send_message(message.chat.id, "ውዴ 😅 ኔትወርክ ከብዶብኛል፣ እንደገና ላክልኝ ❤️")
+    try:
+        answer = ask_gemini(user_id, user_name, message.text)
+        bot.send_message(message.chat.id, answer)
+    except Exception as e:
+        print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Firebase & Bearer Auth Connected)")
+print("🤖 MELU BOT STARTED (GitHub Secrets & Comma Support)")
 print("=" * 45)
 
 while True:
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=30, skip_pending=True)
-    except:
+    except Exception as e:
+        print("Polling error:", e)
         time.sleep(3)
