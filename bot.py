@@ -5,6 +5,7 @@ import time
 import os
 from datetime import datetime
 import base64
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,7 +13,16 @@ load_dotenv()
 BOT_TOKEN = "8984876119:AAGBbvPfId7m00x6zy536vIyX7G67rDIOnc"
 
 raw_keys = os.getenv("GEMINI_API_KEYS", "")
-GEMINI_API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+GEMINI_API_KEYS = []
+try:
+    if raw_keys.strip().startswith("["):
+        GEMINI_API_KEYS = [k.strip() for k in json.loads(raw_keys) if k.strip()]
+    else:
+        cleaned = raw_keys.replace("[", "").replace("]", "").replace('"', "").replace("'", "")
+        GEMINI_API_KEYS = [k.strip() for k in cleaned.split(",") if k.strip()]
+except Exception:
+    cleaned = raw_keys.replace("[", "").replace("]", "").replace('"', "").replace("'", "")
+    GEMINI_API_KEYS = [k.strip() for k in cleaned.split(",") if k.strip()]
 
 current_key_index = 0
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
