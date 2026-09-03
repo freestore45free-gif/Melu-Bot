@@ -123,7 +123,7 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         api_key = get_next_api_key()
         if not api_key:
             break
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
             if response.status_code == 200:
@@ -162,7 +162,7 @@ def ask_gemini(user_id, user_name, text):
         api_key = get_next_api_key()
         if not api_key:
             break
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
             if response.status_code == 200:
