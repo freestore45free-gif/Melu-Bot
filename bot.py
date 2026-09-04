@@ -118,12 +118,18 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        
+        # AQ ኪዮችን በትክክል በ Header (Bearer Token) ማስተላለፍ
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
+        
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
             if response.status_code == 200:
@@ -160,12 +166,18 @@ def ask_gemini(user_id, user_name, text):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        
+        # AQ ኪዮችን በትክክል በ Header (Bearer Token) ማስተላለፍ
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
+        
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
             if response.status_code == 200:
@@ -235,7 +247,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Gemini 3.6 Flash Updated)")
+print("🤖 MELU BOT STARTED (AQ Auth Keys Fixed)")
 print("=" * 45)
 
 while True:
