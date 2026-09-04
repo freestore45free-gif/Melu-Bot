@@ -1,5 +1,4 @@
 import telebot
-import requests
 from collections import defaultdict
 import time
 import os
@@ -7,6 +6,8 @@ from datetime import datetime
 import base64
 import json
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 load_dotenv()
 
@@ -90,7 +91,6 @@ def handle_channel_posts(message):
             pass
 
 def ask_gemini_with_image(user_id, user_name, text, image_bytes):
-    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     history = user_histories[user_id]
     history.append(f"ተጠቃሚ ({user_name}) [ስክሪንሾት ላከ]: {text}")
     if len(history) > 14:
@@ -108,44 +108,23 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
 3. የውይይት ታሪክ: {context_history}
 """
 
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": f"{system_instruction}\n\nጥያቄ:{text}"},
-                {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
-            ]
-        }],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
-    }
-
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        
-        # ኪዮቹን እንደ Termux አቀራረብ በሁለቱም መንገድ (Bearer እና Query) እንዲደገፍ ማድረግ
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
-        headers_with_auth = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
         try:
-            # መጀመሪያ በ Query key ሞክር፣ ካልሰራም በ Bearer ሞክር
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
-            if response.status_code != 200:
-                response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent", headers=headers_with_auth, json=payload, timeout=20)
-                
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["candidates"][0]["content"]["parts"][0]["text"]
-                if answer:
-                    return answer.strip()
-            else:
-                print(f"Gemini API Error ({response.status_code}):", response.text)
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'),
+                    f"{system_instruction}\n\nጥያቄ:{text}"
+                ]
+            )
+            if response and response.text:
+                return response.text.strip()
         except Exception as e:
-            print("Request Exception:", e)
+            print("Gemini SDK Image Error:", e)
             continue
     return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
 
@@ -166,37 +145,20 @@ def ask_gemini(user_id, user_name, text):
 3. የውይይት ታሪክ: {context_history}
 """
 
-    payload = {
-        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
-    }
-
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
-        headers_with_auth = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            if response.status_code != 200:
-                response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent", headers=headers_with_auth, json=payload, timeout=15)
-                
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["candidates"][0]["content"]["parts"][0]["text"]
-                if answer:
-                    return answer.strip()
-            else:
-                print(f"Gemini API Error ({response.status_code}):", response.text)
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=f"{system_instruction}\n\nጥያቄ:{text}"
+            )
+            if response and response.text:
+                return response.text.strip()
         except Exception as e:
-            print("Request Exception:", e)
+            print("Gemini SDK Chat Error:", e)
             continue
     return "ውዴ 😅 ሀሳቤን መግለጽ አልቻልኩም፣ እስቲ እንደገና አነጋግረኝ ❤️"
 
@@ -255,10 +217,10 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Dual Auth Fallback Enabled)")
+print("🤖 MELU BOT STARTED (Google Official SDK & AQ Auth Fixed)")
 print("=" * 45)
 
-while True:
+while `True`:
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
