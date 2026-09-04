@@ -220,7 +220,7 @@ print("=" * 45)
 print("🤖 MELU BOT STARTED (Google Official SDK & AQ Auth Fixed)")
 print("=" * 45)
 
-while `True`:
+while True:
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
