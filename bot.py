@@ -118,20 +118,25 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
+    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
         
-        # AQ ቶከኖች በ Authorization Bearer ሄደር ብቻ እንዲሰሩ ማስተካከል
-        headers = {
+        # ኪዮቹን እንደ Termux አቀራረብ በሁለቱም መንገድ (Bearer እና Query) እንዲደገፍ ማድረግ
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        headers_with_auth = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
         
         try:
+            # መጀመሪያ በ Query key ሞክር፣ ካልሰራም በ Bearer ሞክር
             response = requests.post(url, headers=headers, json=payload, timeout=20)
+            if response.status_code != 200:
+                response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent", headers=headers_with_auth, json=payload, timeout=20)
+                
             if response.status_code == 200:
                 data = response.json()
                 answer = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -166,20 +171,23 @@ def ask_gemini(user_id, user_name, text):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
+    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
         
-        # AQ ቶከኖች በ Authorization Bearer ሄደር ብቻ እንዲሰሩ ማስተካከል
-        headers = {
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        headers_with_auth = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
+            if response.status_code != 200:
+                response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent", headers=headers_with_auth, json=payload, timeout=15)
+                
             if response.status_code == 200:
                 data = response.json()
                 answer = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -214,7 +222,7 @@ def chat(message):
         return
 
     user_id = message.from_user.id
-    user_name = message.from_user.first_name or "ማల్"
+    user_name = message.from_user.first_name or "ማል"
     save_user(user_id)
     bot.send_chat_action(message.chat.id, "typing")
 
@@ -247,7 +255,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (AQ Bearer Token Header Fixed)")
+print("🤖 MELU BOT STARTED (Dual Auth Fallback Enabled)")
 print("=" * 45)
 
 while True:
