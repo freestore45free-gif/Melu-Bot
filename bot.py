@@ -126,7 +126,7 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         except Exception as e:
             print("Gemini SDK Image Error:", e)
             continue
-    return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
+    return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ጊዜያዊ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
 
 def ask_gemini(user_id, user_name, text):
     history = user_histories[user_id]
@@ -217,7 +217,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Google Official SDK & AQ Auth Fixed)")
+print("🤖 MELU BOT STARTED (Google Official SDK & Key Rotation)")
 print("=" * 45)
 
 while True:
