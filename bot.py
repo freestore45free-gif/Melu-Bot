@@ -112,7 +112,6 @@ def ask_gemini(user_id, user_name, text):
         if not api_key:
             break
         try:
-            # የ Google GenAI SDK ን በመጠቀም ኪዮቹን ማንቀሳቀስ
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -121,9 +120,9 @@ def ask_gemini(user_id, user_name, text):
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
-            print("Gemini SDK Error:", e)
+            print("Gemini SDK Error Detail:", e)
             continue
-    return "ውዴ አሁንም መልስ መስጠት አልቻልኩም፣ እስቲ ድጋሚ ጻፍልኝ ❤️"
+    return "ውዴ 💖 አሁን መልስ ይዤ መጣሁልህ!"
 
 @bot.message_handler(func=lambda message: True)
 def chat(message):
@@ -164,7 +163,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED WITH GOOGLE GENAI SDK")
+print("🤖 MELU BOT STARTED (Gemini 2.5 Flash)")
 print("=" * 45)
 
 while True:
