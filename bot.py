@@ -118,14 +118,17 @@ def ask_gemini_with_image(user_id, user_name, text, image_bytes):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
         
-        # Termux ላይ እንደነበረው በቀጥታ በ ዩአርኤል key= በመጠቀም
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        # AQ ቶከኖች በ Authorization Bearer ሄደር ብቻ እንዲሰሩ ማስተካከል
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
@@ -163,14 +166,17 @@ def ask_gemini(user_id, user_name, text):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
         
-        # Termux ላይ እንደነበረው በቀጥታ በ ዩአርኤል key= በመጠቀም
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+        # AQ ቶከኖች በ Authorization Bearer ሄደር ብቻ እንዲሰሩ ማስተካከል
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -208,7 +214,7 @@ def chat(message):
         return
 
     user_id = message.from_user.id
-    user_name = message.from_user.first_name or "ማል"
+    user_name = message.from_user.first_name or "ማల్"
     save_user(user_id)
     bot.send_chat_action(message.chat.id, "typing")
 
@@ -241,7 +247,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Original URL Key Format Restored)")
+print("🤖 MELU BOT STARTED (AQ Bearer Token Header Fixed)")
 print("=" * 45)
 
 while True:
