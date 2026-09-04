@@ -1,4 +1,5 @@
 import telebot
+import requests
 from collections import defaultdict
 import time
 import os
@@ -6,8 +7,6 @@ from datetime import datetime
 import base64
 import json
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 load_dotenv()
 
@@ -90,44 +89,6 @@ def handle_channel_posts(message):
         except Exception:
             pass
 
-def ask_gemini_with_image(user_id, user_name, text, image_bytes):
-    history = user_histories[user_id]
-    history.append(f"ተጠቃሚ ({user_name}) [ስክሪንሾት ላከ]: {text}")
-    if len(history) > 14:
-        history.pop(0)
-
-    context_history = "\n".join(history)
-    saved_files = load_files()
-    files_context = "\n".join([f"- ፋይል: {f['text']}" for f in saved_files[-5:]])
-
-    system_instruction = f"""
-አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ። ፈጣሪሽ እና አለቃሽ @lij_rafi ነው። የ @FreeStoreChannel ረዳት ነሽ።
-አስፈላጊ ሕጎች:
-1. ተጠቃሚው የላከውን ስክሪንሾት ወይም ፎቶ በጥንቃቄ መርምረህ ምስሉ ላይ የሚታየውን ችግር፣ ስህተት ወይም ሁኔታ አጥንትህ **ደረጃ በደረጃ (Step-by-Step)** ግልጽ የሆነ መፍትሄ በአማርኛ አብራርተህ ስጥ።
-2. ፍቅር በተሞላበት እና አጋዥ በሆነ መልኩ አነጋግረው።
-3. የውይይት ታሪክ: {context_history}
-"""
-
-    for _ in range(len(GEMINI_API_KEYS)):
-        api_key = get_next_api_key()
-        if not api_key:
-            break
-        try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[
-                    types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'),
-                    f"{system_instruction}\n\nጥያቄ:{text}"
-                ]
-            )
-            if response and response.text:
-                return response.text.strip()
-        except Exception as e:
-            print("Gemini SDK Image Error:", e)
-            continue
-    return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ጊዜያዊ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
-
 def ask_gemini(user_id, user_name, text):
     history = user_histories[user_id]
     history.append(f"ተጠቃሚ ({user_name}): {text}")
@@ -145,38 +106,32 @@ def ask_gemini(user_id, user_name, text):
 3. የውይይት ታሪክ: {context_history}
 """
 
+    payload = {
+        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}]
+    }
+
+    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
+        
+        # ኪዮቹ ያለ ምንም ማቋረጥ እንዲሰሩ የተደረገበት ዩአርኤል
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
         try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=f"{system_instruction}\n\nጥያቄ:{text}"
-            )
-            if response and response.text:
-                return response.text.strip()
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["candidates"][0]["content"]["parts"][0]["text"]
+                if answer:
+                    return answer.strip()
+            else:
+                print(f"Gemini API Error ({response.status_code}):", response.text)
         except Exception as e:
-            print("Gemini SDK Chat Error:", e)
+            print("Request Exception:", e)
             continue
-    return "ውዴ 😅 ሀሳቤን መግለጽ አልቻልኩም፣ እስቲ እንደገና አነጋግረኝ ❤️"
-
-@bot.message_handler(content_types=['photo'])
-def handle_photos(message):
-    user_id = message.from_user.id
-    user_name = message.from_user.first_name or "ማል"
-    save_user(user_id)
-    bot.send_chat_action(message.chat.id, "typing")
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        caption = message.caption or "እባክህ ይህንን ስክሪንሾት አጥንተህ ችግሩን እና መፍትሄውን ደረጃ በደረጃ አብራርተህ ንገረኝ።"
-        answer = ask_gemini_with_image(user_id, user_name, caption, downloaded_file)
-        bot.send_message(message.chat.id, answer)
-    except Exception as e:
-        print("Photo download error:", e)
-        bot.send_message(message.chat.id, "ስክሪንሾቱን መቀበል አልቻልኩም!")
+    return "ውዴ አሁንመልስ መስጠት አልቻልኩም፣ እስቲ ድጋሚ ጻፍልኝ ❤️"
 
 @bot.message_handler(func=lambda message: True)
 def chat(message):
@@ -217,7 +172,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Google Official SDK & Key Rotation)")
+print("🤖 MELU BOT STARTED PERFECTLY")
 print("=" * 45)
 
 while True:
