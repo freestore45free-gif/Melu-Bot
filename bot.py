@@ -1,4 +1,5 @@
 import telebot
+import requests
 from collections import defaultdict
 import time
 import os
@@ -6,8 +7,6 @@ from datetime import datetime
 import base64
 import json
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 load_dotenv()
 
@@ -107,20 +106,33 @@ def ask_gemini(user_id, user_name, text):
 3. የውይይት ታሪክ: {context_history}
 """
 
+    payload = {
+        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}]
+    }
+
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
+        
+        # AQ ቶከኖች በትክክል በ Bearer Header እና gemini-1.5-flash ሞዴል
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        
         try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=f"{system_instruction}\n\nጥያቄ:{text}"
-            )
-            if response and response.text:
-                return response.text.strip()
+            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["candidates"][0]["content"]["parts"][0]["text"]
+                if answer:
+                    return answer.strip()
+            else:
+                print(f"Gemini API Error ({response.status_code}):", response.text)
         except Exception as e:
-            print("Gemini SDK Error Detail:", e)
+            print("Request Exception:", e)
             continue
     return "ውዴ 💖 አሁን መልስ ይዤ መጣሁልህ!"
 
@@ -163,7 +175,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Gemini 2.5 Flash)")
+print("🤖 MELU BOT STARTED (Bearer Token & Gemini 1.5 Flash)")
 print("=" * 45)
 
 while True:
