@@ -1,5 +1,4 @@
 import telebot
-import requests
 from collections import defaultdict
 import time
 import os
@@ -7,6 +6,8 @@ from datetime import datetime
 import base64
 import json
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 load_dotenv()
 
@@ -106,32 +107,23 @@ def ask_gemini(user_id, user_name, text):
 3. የውይይት ታሪክ: {context_history}
 """
 
-    payload = {
-        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}]
-    }
-
-    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        
-        # ኪዮቹ ያለ ምንም ማቋረጥ እንዲሰሩ የተደረገበት ዩአርኤል
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["candidates"][0]["content"]["parts"][0]["text"]
-                if answer:
-                    return answer.strip()
-            else:
-                print(f"Gemini API Error ({response.status_code}):", response.text)
+            # የ Google GenAI SDK ን በመጠቀም ኪዮቹን ማንቀሳቀስ
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=f"{system_instruction}\n\nጥያቄ:{text}"
+            )
+            if response and response.text:
+                return response.text.strip()
         except Exception as e:
-            print("Request Exception:", e)
+            print("Gemini SDK Error:", e)
             continue
-    return "ውዴ አሁንመልስ መስጠት አልቻልኩም፣ እስቲ ድጋሚ ጻፍልኝ ❤️"
+    return "ውዴ አሁንም መልስ መስጠት አልቻልኩም፣ እስቲ ድጋሚ ጻፍልኝ ❤️"
 
 @bot.message_handler(func=lambda message: True)
 def chat(message):
@@ -172,7 +164,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED PERFECTLY")
+print("🤖 MELU BOT STARTED WITH GOOGLE GENAI SDK")
 print("=" * 45)
 
 while True:
