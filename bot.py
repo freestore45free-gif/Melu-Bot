@@ -12,164 +12,126 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =========================================================
-# ENV VARIABLES
+# CONFIG
 # =========================================================
 
+# Telegram token — NOW READS FROM FAABLE
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# GEMINI_API_KEYS can be:
-# ["key1", "key2", "key3"]
-# OR:
-# key1,key2,key3
-raw_keys = os.getenv("GEMINI_API_KEYS", "").strip()
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is missing from environment variables")
+
+# =========================================================
+# GEMINI API KEYS
+# Supports BOTH:
+# GEMINI_API
+# GEMINI_API_KEYS
+# =========================================================
+
+raw_keys = (
+    os.getenv("GEMINI_API_KEYS", "").strip()
+    or os.getenv("GEMINI_API", "").strip()
+)
+
+GEMINI_API_KEYS = []
 
 
-def load_api_keys(raw):
-    keys = []
-
+def load_gemini_keys(raw):
     if not raw:
-        return keys
+        return []
+
+    raw = raw.strip()
 
     try:
-        # JSON format
+        # JSON list:
+        # ["key1","key2","key3"]
         if raw.startswith("["):
             data = json.loads(raw)
 
             if isinstance(data, list):
-                for key in data:
-                    if isinstance(key, str):
-                        key = key.strip()
-                        if key:
-                            keys.append(key)
+                return [
+                    str(k).strip()
+                    for k in data
+                    if str(k).strip()
+                ]
 
-        else:
-            # Comma separated format
-            cleaned = (
-                raw.replace("[", "")
-                   .replace("]", "")
-                   .replace('"', "")
-                   .replace("'", "")
-            )
+    except Exception:
+        pass
 
-            for key in cleaned.split(","):
-                key = key.strip()
-                if key:
-                    keys.append(key)
+    # Fallback for comma separated:
+    # key1,key2,key3
+    cleaned = (
+        raw
+        .replace("[", "")
+        .replace("]", "")
+        .replace('"', "")
+        .replace("'", "")
+    )
 
-    except Exception as e:
-        print("API KEY LOAD ERROR:", e)
-
-        cleaned = (
-            raw.replace("[", "")
-               .replace("]", "")
-               .replace('"', "")
-               .replace("'", "")
-        )
-
-        for key in cleaned.split(","):
-            key = key.strip()
-            if key:
-                keys.append(key)
-
-    # Remove duplicates while keeping order
-    unique_keys = []
-    seen = set()
-
-    for key in keys:
-        if key not in seen:
-            seen.add(key)
-            unique_keys.append(key)
-
-    return unique_keys
+    return [
+        k.strip()
+        for k in cleaned.split(",")
+        if k.strip()
+    ]
 
 
-GEMINI_API_KEYS = load_api_keys(raw_keys)
-
-
-# =========================================================
-# CHECK CONFIGURATION
-# =========================================================
-
-print("=" * 55)
-print("🤖 MELU BOT")
-print("=" * 55)
-print(f"🔑 Gemini API Keys Loaded: {len(GEMINI_API_KEYS)}")
-
-if len(GEMINI_API_KEYS) == 33:
-    print("✅ All 33 Gemini API keys loaded successfully!")
-else:
-    print(f"⚠️ WARNING: Expected 33 keys, but loaded {len(GEMINI_API_KEYS)}")
-
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN is missing!")
+GEMINI_API_KEYS = load_gemini_keys(raw_keys)
 
 if not GEMINI_API_KEYS:
-    print("❌ GEMINI_API_KEYS is missing!")
-
-print("=" * 55)
+    raise RuntimeError(
+        "No Gemini API keys found. "
+        "Set GEMINI_API or GEMINI_API_KEYS in Faable."
+    )
 
 
 # =========================================================
-# GEMINI KEY ROTATOR
+# KEY ROTATION
 # =========================================================
 
-class GeminiKeyRotator:
+current_key_index = 0
+key_lock = threading.Lock()
 
-    def __init__(self, keys):
-        self.keys = keys
-        self.index = 0
+# Keys that returned permanent authentication errors
+bad_keys = set()
 
-        # Protects rotation when many users request simultaneously
-        self.lock = threading.Lock()
 
-        # Temporarily disabled keys
-        self.disabled_until = {}
+def get_next_api_key():
+    global current_key_index
 
-    def get_next_key(self):
-        if not self.keys:
-            return None
+    with key_lock:
+        total = len(GEMINI_API_KEYS)
 
-        with self.lock:
+        for _ in range(total):
+            key = GEMINI_API_KEYS[current_key_index]
+            current_key_index = (
+                current_key_index + 1
+            ) % total
 
-            total = len(self.keys)
-
-            for _ in range(total):
-
-                index = self.index
-                self.index = (self.index + 1) % total
-
-                key = self.keys[index]
-
-                disabled_time = self.disabled_until.get(key, 0)
-
-                # Skip temporarily disabled key
-                if time.time() < disabled_time:
-                    continue
-
+            if key not in bad_keys:
                 return key
 
-        return None
-
-    def disable_key(self, key, seconds=60):
-        if not key:
-            return
-
-        with self.lock:
-            self.disabled_until[key] = time.time() + seconds
-
-    def count(self):
-        return len(self.keys)
+    return None
 
 
-key_rotator = GeminiKeyRotator(GEMINI_API_KEYS)
+def mark_key_bad(api_key):
+    if api_key:
+        with key_lock:
+            bad_keys.add(api_key)
+
+
+def reset_bad_keys_if_needed():
+    """
+    If all keys became bad, don't permanently kill the bot.
+    Start checking them again.
+    """
+    with key_lock:
+        if len(bad_keys) >= len(GEMINI_API_KEYS):
+            bad_keys.clear()
 
 
 # =========================================================
 # TELEGRAM BOT
 # =========================================================
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not configured!")
 
 bot = telebot.TeleBot(
     BOT_TOKEN,
@@ -187,9 +149,7 @@ FILES_FILE = "files.txt"
 # =========================================================
 
 def load_users():
-
     if os.path.exists(USERS_FILE):
-
         with open(USERS_FILE, "r") as f:
             return set(
                 line.strip()
@@ -201,11 +161,9 @@ def load_users():
 
 
 def save_user(user_id):
-
     users = load_users()
 
     if str(user_id) not in users:
-
         with open(USERS_FILE, "a") as f:
             f.write(f"{user_id}\n")
 
@@ -215,11 +173,9 @@ def save_user(user_id):
 # =========================================================
 
 def load_files():
-
     files = []
 
     if os.path.exists(FILES_FILE):
-
         with open(
             FILES_FILE,
             "r",
@@ -227,20 +183,16 @@ def load_files():
         ) as f:
 
             for line in f:
-
                 parts = line.strip().split("|")
 
                 if len(parts) >= 4:
-
                     try:
-
                         files.append({
                             "date": parts[0],
                             "chat_id": int(parts[1]),
                             "message_id": int(parts[2]),
                             "text": parts[3]
                         })
-
                     except Exception:
                         pass
 
@@ -248,7 +200,6 @@ def load_files():
 
 
 def save_file(post_info):
-
     with open(
         FILES_FILE,
         "a",
@@ -267,19 +218,26 @@ def save_file(post_info):
 # GEMINI REQUEST
 # =========================================================
 
-def call_gemini(payload, timeout=20):
+GEMINI_MODEL = "gemini-3.7-flash"
 
-    total_keys = key_rotator.count()
+GEMINI_URL = (
+    f"https://generativelanguage.googleapis.com/"
+    f"v1beta/models/{GEMINI_MODEL}:generateContent"
+)
 
-    if total_keys == 0:
-        return None
 
-    # Try every available key once
+def gemini_request(payload, timeout=30):
+
+    total_keys = len(GEMINI_API_KEYS)
+
+    reset_bad_keys_if_needed()
+
     for attempt in range(total_keys):
 
-        api_key = key_rotator.get_next_key()
+        api_key = get_next_api_key()
 
         if not api_key:
+            reset_bad_keys_if_needed()
             continue
 
         print(
@@ -287,20 +245,15 @@ def call_gemini(payload, timeout=20):
             f"key attempt {attempt + 1}/{total_keys}"
         )
 
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            "v1beta/models/gemini-3.7-flash:generateContent"
-            f"?key={api_key}"
-        )
-
         headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key
         }
 
         try:
 
             response = requests.post(
-                url,
+                GEMINI_URL,
                 headers=headers,
                 json=payload,
                 timeout=timeout
@@ -308,9 +261,9 @@ def call_gemini(payload, timeout=20):
 
             status = response.status_code
 
-            # -------------------------------------------------
+            # =================================================
             # SUCCESS
-            # -------------------------------------------------
+            # =================================================
 
             if status == 200:
 
@@ -333,100 +286,123 @@ def call_gemini(payload, timeout=20):
                         []
                     )
 
-                    if parts:
+                    for part in parts:
 
-                        answer = parts[0].get(
-                            "text",
-                            ""
-                        )
+                        text = part.get("text")
 
-                        if answer:
-
+                        if text:
                             print(
                                 f"✅ Gemini success "
-                                f"with attempt {attempt + 1}"
+                                f"with attempt "
+                                f"{attempt + 1}"
                             )
 
-                            return answer.strip()
-
-                print("⚠️ Gemini returned empty response")
-                continue
-
-            # -------------------------------------------------
-            # INVALID / BLOCKED KEY
-            # -------------------------------------------------
-
-            elif status in (400, 401, 403):
+                            return text.strip()
 
                 print(
-                    f"❌ Gemini key rejected: HTTP {status}"
-                )
-
-                # Temporarily skip this key
-                key_rotator.disable_key(
-                    api_key,
-                    seconds=300
+                    "⚠️ Gemini returned "
+                    "empty response"
                 )
 
                 continue
 
-            # -------------------------------------------------
+            # =================================================
+            # INVALID / UNAUTHORIZED KEY
+            # =================================================
+
+            elif status == 401:
+
+                print(
+                    "❌ Gemini key rejected: "
+                    "HTTP 401"
+                )
+
+                # Don't keep wasting time
+                # on this key.
+                mark_key_bad(api_key)
+
+                continue
+
+            # =================================================
+            # PERMISSION
+            # =================================================
+
+            elif status == 403:
+
+                print(
+                    "❌ Gemini key permission "
+                    "error: HTTP 403"
+                )
+
+                mark_key_bad(api_key)
+
+                continue
+
+            # =================================================
             # RATE LIMIT
-            # -------------------------------------------------
+            # =================================================
 
             elif status == 429:
 
                 print(
-                    "⏳ Gemini key rate limited (429)"
+                    "⚠️ Gemini rate limit: "
+                    "HTTP 429"
                 )
 
-                # Skip this key for 60 minutes
-                key_rotator.disable_key(
-                    api_key,
-                    seconds=3600
-                )
+                # Wait briefly, then try another key
+                time.sleep(2)
 
                 continue
 
-            # -------------------------------------------------
-            # SERVER ERROR
-            # -------------------------------------------------
+            # =================================================
+            # SERVER ERRORS
+            # =================================================
 
-            elif status >= 500:
+            elif status in (500, 502, 503, 504):
 
                 print(
-                    f"⚠️ Gemini server error: HTTP {status}"
+                    f"⚠️ Gemini server error: "
+                    f"HTTP {status}"
                 )
 
-                # Short temporary disable
-                key_rotator.disable_key(
-                    api_key,
-                    seconds=30
-                )
+                # Retry after short delay
+                time.sleep(2)
 
                 continue
 
-            # -------------------------------------------------
+            # =================================================
             # OTHER ERROR
-            # -------------------------------------------------
+            # =================================================
 
             else:
 
                 print(
-                    f"⚠️ Gemini HTTP error: {status}"
+                    f"⚠️ Gemini HTTP error: "
+                    f"{status}"
                 )
+
+                try:
+                    print(
+                        response.text[:300]
+                    )
+                except Exception:
+                    pass
 
                 continue
 
         except requests.exceptions.Timeout:
 
-            print("⏱️ Gemini request timeout")
+            print(
+                "⏰ Gemini request timeout"
+            )
+
             continue
 
         except requests.exceptions.RequestException as e:
 
             print(
-                f"🌐 Gemini network error: {e}"
+                f"🌐 Gemini connection error: "
+                f"{e}"
             )
 
             continue
@@ -434,86 +410,26 @@ def call_gemini(payload, timeout=20):
         except Exception as e:
 
             print(
-                f"❌ Gemini unexpected error: {e}"
+                f"❌ Gemini unexpected error: "
+                f"{e}"
             )
 
             continue
 
+    # =========================================================
+    # ALL KEYS FAILED
+    # =========================================================
+
     print(
-        "❌ All available Gemini API keys failed."
+        "❌ All Gemini API keys failed "
+        "for this request."
     )
 
     return None
 
 
 # =========================================================
-# GEMINI TEXT
-# =========================================================
-
-def ask_gemini(user_id, user_name, text):
-
-    history = user_histories[user_id]
-
-    history.append(
-        f"ተጠቃሚ ({user_name}): {text}"
-    )
-
-    if len(history) > 14:
-        history.pop(0)
-
-    context_history = "\n".join(history)
-
-    saved_files = load_files()
-
-    files_context = "\n".join(
-        [
-            f"- ፋይል: {f['text']}"
-            for f in saved_files[-5:]
-        ]
-    )
-
-    system_instruction = f"""
-አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ።
-ፈጣሪሽ እና አለቃሽ @lij_rafi ነው።
-የ @FreeStoreChannel ረዳት ነሽ።
-
-1. ተጠቃሚው ለጠየቀው ማንኛውም ጥያቄ፣
-ወሬ ወይም ንግግር አጭር፣ ግልጽ እና
-ፍቅር በተሞላበት መልኩ በአማርኛ መልስ ስጥ።
-
-2. የቅርብ ጊዜ መረጃዎች:
-{files_context}
-
-3. የውይይት ታሪክ:
-{context_history}
-"""
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text":
-                        f"{system_instruction}\n\n"
-                        f"ጥያቄ: {text}"
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2000
-        }
-    }
-
-    return call_gemini(
-        payload,
-        timeout=20
-    )
-
-
-# =========================================================
-# GEMINI IMAGE
+# IMAGE REQUEST
 # =========================================================
 
 def ask_gemini_with_image(
@@ -539,21 +455,40 @@ def ask_gemini_with_image(
 
     context_history = "\n".join(history)
 
+    saved_files = load_files()
+
+    files_context = "\n".join(
+        [
+            f"- ፋይል: {f['text']}"
+            for f in saved_files[-5:]
+        ]
+    )
+
     system_instruction = f"""
-አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ።
+አንቺ ሜሉ (Melu) የተባልሽ
+የTelegram bot ነሽ።
+
 ፈጣሪሽ እና አለቃሽ @lij_rafi ነው።
 የ @FreeStoreChannel ረዳት ነሽ።
 
-ተጠቃሚው የላከውን ስክሪንሾት
-በጥንቃቄ መርምረህ ምስሉ ላይ
-የሚታየውን ችግር ወይም ሁኔታ
-አጥንተህ ደረጃ በደረጃ በአማርኛ
-ግልጽ መፍትሄ ስጥ።
+አስፈላጊ ሕጎች:
 
-በፍቅር እና በአጋዥ መልኩ አነጋግረው።
+1. ተጠቃሚው የላከውን
+ስክሪንሾት ወይም ፎቶ
+በጥንቃቄ መርምሪ።
 
-የውይይት ታሪክ:
+2. ችግሩን ከተረዳሽ
+ደረጃ በደረጃ
+በግልጽ አማርኛ አብራሪ።
+
+3. አጋዥ፣ ተረጋጋና
+ፍቅር ያለበት ንግግር ተጠቀሚ።
+
+4. የውይይት ታሪክ:
 {context_history}
+
+5. የቅርብ ጊዜ ፋይሎች:
+{files_context}
 """
 
     payload = {
@@ -580,9 +515,104 @@ def ask_gemini_with_image(
         }
     }
 
-    return call_gemini(
+    answer = gemini_request(
+        payload,
+        timeout=40
+    )
+
+    if answer:
+        return answer
+
+    return (
+        "ውዴ 😅 Gemini ላይ በዚህ "
+        "ጊዜ ችግር አጋጥሟል። "
+        "እባክህ እንደገና ላክልኝ ❤️"
+    )
+
+
+# =========================================================
+# TEXT REQUEST
+# =========================================================
+
+def ask_gemini(
+    user_id,
+    user_name,
+    text
+):
+
+    history = user_histories[user_id]
+
+    history.append(
+        f"ተጠቃሚ ({user_name}): {text}"
+    )
+
+    if len(history) > 14:
+        history.pop(0)
+
+    context_history = "\n".join(history)
+
+    saved_files = load_files()
+
+    files_context = "\n".join(
+        [
+            f"- ፋይል: {f['text']}"
+            for f in saved_files[-5:]
+        ]
+    )
+
+    system_instruction = f"""
+አንቺ ሜሉ (Melu) የተባልሽ
+የTelegram bot ነሽ።
+
+ፈጣሪሽ እና አለቃሽ @lij_rafi ነው።
+የ @FreeStoreChannel ረዳት ነሽ።
+
+1. ተጠቃሚው ለጠየቀው
+ጥያቄ ግልጽ፣ አጭር
+እና አጋዥ መልስ ስጪ።
+
+2. ተጠቃሚው መደበኛ
+ውይይት ካደረገ በተፈጥሮ
+መልስ ስጪ።
+
+3. የቅርብ ጊዜ ፋይሎች:
+{files_context}
+
+4. የውይይት ታሪክ:
+{context_history}
+"""
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text":
+                        f"{system_instruction}\n\n"
+                        f"ጥያቄ: {text}"
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 2000
+        }
+    }
+
+    answer = gemini_request(
         payload,
         timeout=30
+    )
+
+    if answer:
+        return answer
+
+    return (
+        "ውዴ 😅 ሁሉንም Gemini keys "
+        "ሞክሬ ለጊዜው መልስ "
+        "ማግኘት አልቻልኩም። "
+        "እንደገና ሞክሪ ❤️"
     )
 
 
@@ -632,12 +662,15 @@ def handle_channel_posts(message):
                 message.message_id
             )
 
-        except Exception:
-            pass
+        except Exception as e:
+
+            print(
+                f"Channel forward error: {e}"
+            )
 
 
 # =========================================================
-# PHOTO HANDLER
+# PHOTOS
 # =========================================================
 
 @bot.message_handler(
@@ -654,12 +687,12 @@ def handle_photos(message):
 
     save_user(user_id)
 
-    bot.send_chat_action(
-        message.chat.id,
-        "typing"
-    )
-
     try:
+
+        bot.send_chat_action(
+            message.chat.id,
+            "typing"
+        )
 
         file_info = bot.get_file(
             message.photo[-1].file_id
@@ -673,8 +706,9 @@ def handle_photos(message):
             message.caption
             or
             "እባክህ ይህንን ስክሪንሾት "
-            "አጥንተህ ችግሩን እና መፍትሄውን "
-            "ደረጃ በደረጃ አብራርተህ ንገረኝ።"
+            "አጥንተህ ችግሩን እና "
+            "መፍትሄውን ደረጃ በደረጃ "
+            "አብራርተህ ንገረኝ።"
         )
 
         answer = ask_gemini_with_image(
@@ -684,13 +718,6 @@ def handle_photos(message):
             downloaded_file
         )
 
-        if not answer:
-            answer = (
-                "ውዴ 😅 አሁን ሁሉም Gemini "
-                "API keys ችግር አለባቸው። "
-                "ትንሽ ቆይተህ እንደገና ሞክር ❤️"
-            )
-
         bot.send_message(
             message.chat.id,
             answer
@@ -699,14 +726,18 @@ def handle_photos(message):
     except Exception as e:
 
         print(
-            "Photo error:",
-            e
+            f"Photo handler error: {e}"
         )
 
-        bot.send_message(
-            message.chat.id,
-            "ስክሪንሾቱን መቀበል አልቻልኩም!"
-        )
+        try:
+            bot.send_message(
+                message.chat.id,
+                "ውዴ 😅 ፎቶውን ማስተንተን "
+                "ላይ ችግር ተፈጥሯል። "
+                "እንደገና ላኪልኝ ❤️"
+            )
+        except Exception:
+            pass
 
 
 # =========================================================
@@ -730,12 +761,24 @@ def chat(message):
 
     save_user(user_id)
 
-    bot.send_chat_action(
-        message.chat.id,
-        "typing"
-    )
+    try:
 
-    if message.text.strip().lower() == "/stats":
+        bot.send_chat_action(
+            message.chat.id,
+            "typing"
+        )
+
+    except Exception:
+        pass
+
+    # =====================================================
+    # STATS
+    # =====================================================
+
+    if (
+        message.text.strip().lower()
+        == "/stats"
+    ):
 
         total_users = len(
             load_users()
@@ -743,26 +786,33 @@ def chat(message):
 
         bot.send_message(
             message.chat.id,
-            f"📊 አጠቃላይ ቦቱን "
-            f"እየተጠቀሙ ያሉ ሰዎች "
-            f"ብዛት: {total_users} 👥"
+            f"📊 አጠቃላይ ተጠቃሚዎች: "
+            f"{total_users} 👥"
         )
 
         return
 
-    text_lower = message.text.lower()
+    # =====================================================
+    # FILE SEARCH
+    # =====================================================
+
+    text_lower = (
+        message.text.lower()
+    )
+
+    keywords = [
+        "ehi",
+        "pkg",
+        "telegram",
+        "vpn",
+        "config",
+        "فايبر",
+        "net"
+    ]
 
     if any(
         kw in text_lower
-        for kw in [
-            "ehi",
-            "pkg",
-            "telegram",
-            "vpn",
-            "config",
-            "فايبر",
-            "net"
-        ]
+        for kw in keywords
     ):
 
         saved_files = load_files()
@@ -771,11 +821,14 @@ def chat(message):
 
             target_file = saved_files[-1]
 
-            for f in reversed(saved_files):
+            for f in reversed(
+                saved_files
+            ):
 
                 if any(
                     word in f["text"]
-                    for word in text_lower.split()
+                    for word
+                    in text_lower.split()
                     if len(word) > 3
                 ):
 
@@ -795,16 +848,20 @@ def chat(message):
             except Exception as e:
 
                 print(
-                    "Forward error:",
-                    e
+                    f"Forward error: {e}"
                 )
 
         bot.send_message(
             message.chat.id,
-            "እስካሁን ምንም ፋይል አልተገኘም!"
+            "እስካሁን ምንም ፋይል "
+            "አልተገኘም!"
         )
 
         return
+
+    # =====================================================
+    # NORMAL GEMINI CHAT
+    # =====================================================
 
     try:
 
@@ -814,14 +871,6 @@ def chat(message):
             message.text
         )
 
-        if not answer:
-
-            answer = (
-                "ውዴ 😅 አሁን Gemini API "
-                "keys ሁሉ ላይ ችግር አለ። "
-                "ትንሽ ቆይተህ እንደገና ሞክር ❤️"
-            )
-
         bot.send_message(
             message.chat.id,
             answer
@@ -830,8 +879,7 @@ def chat(message):
     except Exception as e:
 
         print(
-            "Chat handler error:",
-            e
+            f"Chat handler error: {e}"
         )
 
 
@@ -840,15 +888,35 @@ def chat(message):
 # =========================================================
 
 print("=" * 55)
-print("🚀 MELU BOT STARTED")
-print(f"🔑 TOTAL GEMINI KEYS: {len(GEMINI_API_KEYS)}")
-print("🔄 API KEY ROTATION: ENABLED")
+print("🤖 MELU BOT")
+print("=" * 55)
+print(
+    f"🔑 Gemini API Keys Loaded: "
+    f"{len(GEMINI_API_KEYS)}"
+)
+print(
+    "🔄 API KEY ROTATION: ENABLED"
+)
+print(
+    "♻️ 401 BAD KEYS: AUTO SKIP"
+)
+print(
+    "🔁 429/5xx: AUTO RETRY"
+)
 print("=" * 55)
 
+
+# =========================================================
+# INFINITE TELEGRAM POLLING
+# =========================================================
 
 while True:
 
     try:
+
+        print(
+            "🚀 MELU BOT STARTED"
+        )
 
         bot.infinity_polling(
             timeout=60,
@@ -859,8 +927,11 @@ while True:
     except Exception as e:
 
         print(
-            "Polling error:",
-            e
+            f"⚠️ Telegram polling error: {e}"
         )
 
-        time.sleep(3)
+        print(
+            "🔄 Restarting polling in 5 seconds..."
+        )
+
+        time.sleep(5)
