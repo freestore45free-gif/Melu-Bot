@@ -1,132 +1,86 @@
-import telebot
-import requests
-from collections import defaultdict
-import time
 import os
-from datetime import datetime
-import base64
+import time
 import json
 import threading
-from dotenv import load_dotenv
-
-load_dotenv()
+import requests
+import telebot
+from collections import defaultdict, deque
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-# Telegram token — NOW READS FROM FAABLE
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
+# Supports both names
+RAW_KEYS = os.getenv("GEMINI_API_KEYS", "").strip()
+
+if not RAW_KEYS:
+    RAW_KEYS = os.getenv("GEMINI_API", "").strip()
+
+MODEL = "gemini-3.7-flash"
+
+MAX_HISTORY = 20
+REQUEST_TIMEOUT = 60
+MAX_RETRIES = 2
+
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing from environment variables")
+    raise RuntimeError("BOT_TOKEN is missing from environment variables.")
 
 # =========================================================
-# GEMINI API KEYS
-# Supports BOTH:
-# GEMINI_API
-# GEMINI_API_KEYS
+# GEMINI KEY PARSER
 # =========================================================
 
-raw_keys = (
-    os.getenv("GEMINI_API_KEYS", "").strip()
-    or os.getenv("GEMINI_API", "").strip()
-)
-
-GEMINI_API_KEYS = []
-
-
-def load_gemini_keys(raw):
+def parse_api_keys(raw):
     if not raw:
         return []
 
     raw = raw.strip()
 
-    try:
-        # JSON list:
-        # ["key1","key2","key3"]
-        if raw.startswith("["):
+    # JSON array
+    if raw.startswith("["):
+        try:
             data = json.loads(raw)
 
             if isinstance(data, list):
-                return [
-                    str(k).strip()
-                    for k in data
-                    if str(k).strip()
-                ]
+                keys = []
+                for item in data:
+                    if isinstance(item, str):
+                        item = item.strip().strip('"').strip("'")
+                        if item:
+                            keys.append(item)
+                return keys
+        except Exception:
+            pass
 
-    except Exception:
-        pass
+    # Normal separators
+    raw = raw.replace("\r", "\n")
+    raw = raw.replace(";", "\n")
+    raw = raw.replace(",", "\n")
 
-    # Fallback for comma separated:
-    # key1,key2,key3
-    cleaned = (
-        raw
-        .replace("[", "")
-        .replace("]", "")
-        .replace('"', "")
-        .replace("'", "")
-    )
+    keys = []
 
-    return [
-        k.strip()
-        for k in cleaned.split(",")
-        if k.strip()
-    ]
+    for line in raw.split("\n"):
+        key = line.strip()
+        key = key.strip('"').strip("'")
+        key = key.strip("[]")
+
+        if key:
+            keys.append(key)
+
+    return keys
 
 
-GEMINI_API_KEYS = load_gemini_keys(raw_keys)
+GEMINI_API_KEYS = parse_api_keys(RAW_KEYS)
 
 if not GEMINI_API_KEYS:
-    raise RuntimeError(
-        "No Gemini API keys found. "
-        "Set GEMINI_API or GEMINI_API_KEYS in Faable."
-    )
+    raise RuntimeError("No Gemini API keys found.")
 
-
-# =========================================================
-# KEY ROTATION
-# =========================================================
-
-current_key_index = 0
-key_lock = threading.Lock()
-
-# Keys that returned permanent authentication errors
-bad_keys = set()
-
-
-def get_next_api_key():
-    global current_key_index
-
-    with key_lock:
-        total = len(GEMINI_API_KEYS)
-
-        for _ in range(total):
-            key = GEMINI_API_KEYS[current_key_index]
-            current_key_index = (
-                current_key_index + 1
-            ) % total
-
-            if key not in bad_keys:
-                return key
-
-    return None
-
-
-def mark_key_bad(api_key):
-    if api_key:
-        with key_lock:
-            bad_keys.add(api_key)
-
-
-def reset_bad_keys_if_needed():
-    """
-    If all keys became bad, don't permanently kill the bot.
-    Start checking them again.
-    """
-    with key_lock:
-        if len(bad_keys) >= len(GEMINI_API_KEYS):
-            bad_keys.clear()
+print("========================================")
+print("🤖 MELU BOT STARTED")
+print(f"🔑 TOTAL GEMINI KEYS: {len(GEMINI_API_KEYS)}")
+print("🔄 API KEY ROTATION: ENABLED")
+print("========================================")
 
 
 # =========================================================
@@ -135,114 +89,105 @@ def reset_bad_keys_if_needed():
 
 bot = telebot.TeleBot(
     BOT_TOKEN,
-    threaded=True
+    parse_mode=None,
+    threaded=True,
+    num_threads=8
 )
 
-user_histories = defaultdict(list)
 
-USERS_FILE = "users.txt"
-FILES_FILE = "files.txt"
+# =========================================================
+# MEMORY
+# =========================================================
+
+user_history = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
+
+history_lock = threading.Lock()
+
+# Gemini key rotation
+key_index = 0
+key_lock = threading.Lock()
 
 
 # =========================================================
-# USERS
+# KEY ROTATION
 # =========================================================
 
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            return set(
-                line.strip()
-                for line in f
-                if line.strip().isdigit()
-            )
+def get_next_key():
+    global key_index
 
-    return set()
+    with key_lock:
+        index = key_index
+        key = GEMINI_API_KEYS[index]
 
+        key_index = (key_index + 1) % len(GEMINI_API_KEYS)
 
-def save_user(user_id):
-    users = load_users()
-
-    if str(user_id) not in users:
-        with open(USERS_FILE, "a") as f:
-            f.write(f"{user_id}\n")
+        return index, key
 
 
 # =========================================================
-# FILES
+# SYSTEM PROMPT
 # =========================================================
 
-def load_files():
-    files = []
+SYSTEM_PROMPT = """
+አንቺ ሜሉ (Melu) የተባልሽ የTelegram AI bot ነሽ።
 
-    if os.path.exists(FILES_FILE):
-        with open(
-            FILES_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
+በተፈጥሮ ከሰው ጋር እንደምትወሪ ተናገሪ።
+ተጠቃሚው በአማርኛ ከጠየቀ በአማርኛ መልሺ።
+በEnglish ከጠየቀ English መልሺ።
+ተጠቃሚውን አትደግሚ፤ በቀጥታ መልስ ስጪ።
 
-            for line in f:
-                parts = line.strip().split("|")
+ተጠቃሚው ሲቀልድ ተቀላቀዪ።
+ሲያዝን በርህራሄ መልሺ።
+ጥያቄ ከጠየቀ ግልጽ መልስ ስጪ።
 
-                if len(parts) >= 4:
-                    try:
-                        files.append({
-                            "date": parts[0],
-                            "chat_id": int(parts[1]),
-                            "message_id": int(parts[2]),
-                            "text": parts[3]
-                        })
-                    except Exception:
-                        pass
+አንቺ የምትችይውን እውነተኛ እውቀት ተጠቀሚ።
+የማታውቂውን ነገር እንደምታውቂ አትመስዪ።
 
-    return files
+አላስፈላጊ ረጅም መልስ አትስጪ።
+የተጠቃሚውን ቋንቋና የንግግር ስልት ተከተዪ።
+
+አንቺ ሜሉ ነሽ።
+"""
 
 
-def save_file(post_info):
-    with open(
-        FILES_FILE,
-        "a",
-        encoding="utf-8"
-    ) as f:
+# =========================================================
+# HISTORY
+# =========================================================
 
-        f.write(
-            f"{post_info['date']}|"
-            f"{post_info['chat_id']}|"
-            f"{post_info['message_id']}|"
-            f"{post_info['text']}\n"
-        )
+def add_history(user_id, role, text):
+    with history_lock:
+        user_history[user_id].append({
+            "role": role,
+            "text": text
+        })
+
+
+def get_history(user_id):
+    with history_lock:
+        return list(user_history[user_id])
 
 
 # =========================================================
 # GEMINI REQUEST
 # =========================================================
 
-GEMINI_MODEL = "gemini-3.7-flash"
-
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/"
-    f"v1beta/models/{GEMINI_MODEL}:generateContent"
-)
-
-
-def gemini_request(payload, timeout=30):
+def gemini_request(payload, user_id=None):
 
     total_keys = len(GEMINI_API_KEYS)
 
-    reset_bad_keys_if_needed()
-
+    # Try every key
     for attempt in range(total_keys):
 
-        api_key = get_next_api_key()
-
-        if not api_key:
-            reset_bad_keys_if_needed()
-            continue
+        index, api_key = get_next_key()
 
         print(
-            f"🔑 Gemini request: "
-            f"key attempt {attempt + 1}/{total_keys}"
+            f"🔑 Gemini request: key attempt "
+            f"{attempt + 1}/{total_keys}"
+        )
+
+        url = (
+            f"https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{MODEL}:generateContent"
         )
 
         headers = {
@@ -253,685 +198,531 @@ def gemini_request(payload, timeout=30):
         try:
 
             response = requests.post(
-                GEMINI_URL,
+                url,
                 headers=headers,
                 json=payload,
-                timeout=timeout
+                timeout=REQUEST_TIMEOUT
             )
 
             status = response.status_code
 
-            # =================================================
             # SUCCESS
-            # =================================================
-
             if status == 200:
 
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception:
+                    print("❌ Gemini returned invalid JSON")
+                    continue
 
-                candidates = data.get(
-                    "candidates",
-                    []
-                )
+                candidates = data.get("candidates", [])
 
-                if candidates:
+                if not candidates:
+                    print("⚠️ Gemini returned no candidates")
+                    continue
 
-                    content = candidates[0].get(
-                        "content",
-                        {}
-                    )
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
 
-                    parts = content.get(
-                        "parts",
-                        []
-                    )
+                texts = []
 
-                    for part in parts:
-
+                for part in parts:
+                    if isinstance(part, dict):
                         text = part.get("text")
-
                         if text:
-                            print(
-                                f"✅ Gemini success "
-                                f"with attempt "
-                                f"{attempt + 1}"
-                            )
+                            texts.append(text)
 
-                            return text.strip()
+                final_text = "\n".join(texts).strip()
+
+                if final_text:
+
+                    print(
+                        f"✅ Gemini success with attempt "
+                        f"{attempt + 1}"
+                    )
+
+                    return final_text
+
+                print("⚠️ Gemini response had no text")
+                continue
+
+            # INVALID KEY
+            elif status in (401, 403):
 
                 print(
-                    "⚠️ Gemini returned "
-                    "empty response"
+                    f"❌ Gemini key rejected: HTTP {status}"
                 )
 
                 continue
 
-            # =================================================
-            # INVALID / UNAUTHORIZED KEY
-            # =================================================
-
-            elif status == 401:
+            # RATE LIMIT / SERVER ERROR
+            elif status in (429, 500, 502, 503, 504):
 
                 print(
-                    "❌ Gemini key rejected: "
-                    "HTTP 401"
+                    f"⚠️ Gemini temporary error: HTTP {status}"
                 )
 
-                # Don't keep wasting time
-                # on this key.
-                mark_key_bad(api_key)
+                # Small delay before next key
+                time.sleep(1)
 
                 continue
-
-            # =================================================
-            # PERMISSION
-            # =================================================
-
-            elif status == 403:
-
-                print(
-                    "❌ Gemini key permission "
-                    "error: HTTP 403"
-                )
-
-                mark_key_bad(api_key)
-
-                continue
-
-            # =================================================
-            # RATE LIMIT
-            # =================================================
-
-            elif status == 429:
-
-                print(
-                    "⚠️ Gemini rate limit: "
-                    "HTTP 429"
-                )
-
-                # Wait briefly, then try another key
-                time.sleep(2)
-
-                continue
-
-            # =================================================
-            # SERVER ERRORS
-            # =================================================
-
-            elif status in (500, 502, 503, 504):
-
-                print(
-                    f"⚠️ Gemini server error: "
-                    f"HTTP {status}"
-                )
-
-                # Retry after short delay
-                time.sleep(2)
-
-                continue
-
-            # =================================================
-            # OTHER ERROR
-            # =================================================
 
             else:
 
                 print(
-                    f"⚠️ Gemini HTTP error: "
-                    f"{status}"
+                    f"⚠️ Gemini unexpected error: HTTP {status}"
                 )
-
-                try:
-                    print(
-                        response.text[:300]
-                    )
-                except Exception:
-                    pass
 
                 continue
 
         except requests.exceptions.Timeout:
 
-            print(
-                "⏰ Gemini request timeout"
-            )
-
+            print("⏰ Gemini request timeout")
             continue
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.ConnectionError:
 
-            print(
-                f"🌐 Gemini connection error: "
-                f"{e}"
-            )
-
+            print("🌐 Gemini connection error")
             continue
 
         except Exception as e:
 
-            print(
-                f"❌ Gemini unexpected error: "
-                f"{e}"
-            )
-
+            print(f"❌ Gemini exception: {type(e).__name__}")
             continue
-
-    # =========================================================
-    # ALL KEYS FAILED
-    # =========================================================
-
-    print(
-        "❌ All Gemini API keys failed "
-        "for this request."
-    )
 
     return None
-
-
-# =========================================================
-# IMAGE REQUEST
-# =========================================================
-
-def ask_gemini_with_image(
-    user_id,
-    user_name,
-    text,
-    image_bytes
-):
-
-    image_base64 = base64.b64encode(
-        image_bytes
-    ).decode("utf-8")
-
-    history = user_histories[user_id]
-
-    history.append(
-        f"ተጠቃሚ ({user_name}) "
-        f"[ስክሪንሾት ላከ]: {text}"
-    )
-
-    if len(history) > 14:
-        history.pop(0)
-
-    context_history = "\n".join(history)
-
-    saved_files = load_files()
-
-    files_context = "\n".join(
-        [
-            f"- ፋይል: {f['text']}"
-            for f in saved_files[-5:]
-        ]
-    )
-
-    system_instruction = f"""
-አንቺ ሜሉ (Melu) የተባልሽ
-የTelegram bot ነሽ።
-
-ፈጣሪሽ እና አለቃሽ @lij_rafi ነው።
-የ @FreeStoreChannel ረዳት ነሽ።
-
-አስፈላጊ ሕጎች:
-
-1. ተጠቃሚው የላከውን
-ስክሪንሾት ወይም ፎቶ
-በጥንቃቄ መርምሪ።
-
-2. ችግሩን ከተረዳሽ
-ደረጃ በደረጃ
-በግልጽ አማርኛ አብራሪ።
-
-3. አጋዥ፣ ተረጋጋና
-ፍቅር ያለበት ንግግር ተጠቀሚ።
-
-4. የውይይት ታሪክ:
-{context_history}
-
-5. የቅርብ ጊዜ ፋይሎች:
-{files_context}
-"""
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text":
-                        f"{system_instruction}\n\n"
-                        f"ጥያቄ: {text}"
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": image_base64
-                        }
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2000
-        }
-    }
-
-    answer = gemini_request(
-        payload,
-        timeout=40
-    )
-
-    if answer:
-        return answer
-
-    return (
-        "ውዴ 😅 Gemini ላይ በዚህ "
-        "ጊዜ ችግር አጋጥሟል። "
-        "እባክህ እንደገና ላክልኝ ❤️"
-    )
-
-
-# =========================================================
-# TEXT REQUEST
-# =========================================================
-
-def ask_gemini(
-    user_id,
-    user_name,
-    text
-):
-
-    history = user_histories[user_id]
-
-    history.append(
-        f"ተጠቃሚ ({user_name}): {text}"
-    )
-
-    if len(history) > 14:
-        history.pop(0)
-
-    context_history = "\n".join(history)
-
-    saved_files = load_files()
-
-    files_context = "\n".join(
-        [
-            f"- ፋይል: {f['text']}"
-            for f in saved_files[-5:]
-        ]
-    )
-
-    system_instruction = f"""
-አንቺ ሜሉ (Melu) የተባልሽ
-የTelegram bot ነሽ።
-
-ፈጣሪሽ እና አለቃሽ @lij_rafi ነው።
-የ @FreeStoreChannel ረዳት ነሽ።
-
-1. ተጠቃሚው ለጠየቀው
-ጥያቄ ግልጽ፣ አጭር
-እና አጋዥ መልስ ስጪ።
-
-2. ተጠቃሚው መደበኛ
-ውይይት ካደረገ በተፈጥሮ
-መልስ ስጪ።
-
-3. የቅርብ ጊዜ ፋይሎች:
-{files_context}
-
-4. የውይይት ታሪክ:
-{context_history}
-"""
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text":
-                        f"{system_instruction}\n\n"
-                        f"ጥያቄ: {text}"
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2000
-        }
-    }
-
-    answer = gemini_request(
-        payload,
-        timeout=30
-    )
-
-    if answer:
-        return answer
-
-    return (
-        "ውዴ 😅 ሁሉንም Gemini keys "
-        "ሞክሬ ለጊዜው መልስ "
-        "ማግኘት አልቻልኩም። "
-        "እንደገና ሞክሪ ❤️"
-    )
-
-
-# =========================================================
-# CHANNEL POSTS
-# =========================================================
-
-@bot.channel_post_handler(
-    content_types=[
-        "document",
-        "audio",
-        "video",
-        "text",
-        "photo"
-    ]
-)
-def handle_channel_posts(message):
-
-    today_date = datetime.now().strftime(
-        "%Y-%m-%d"
-    )
-
-    post_info = {
-        "date": today_date,
-        "chat_id": message.chat.id,
-        "message_id": message.message_id,
-        "text": (
-            message.text
-            or message.caption
-            or ""
-        ).lower()
-    }
-
-    save_file(post_info)
-
-    all_users = load_users()
-
-    for user_id_str in all_users:
-
-        try:
-
-            uid = int(user_id_str)
-
-            bot.forward_message(
-                uid,
-                message.chat.id,
-                message.message_id
-            )
-
-        except Exception as e:
-
-            print(
-                f"Channel forward error: {e}"
-            )
-
-
-# =========================================================
-# PHOTOS
-# =========================================================
-
-@bot.message_handler(
-    content_types=["photo"]
-)
-def handle_photos(message):
-
-    user_id = message.from_user.id
-
-    user_name = (
-        message.from_user.first_name
-        or "ማል"
-    )
-
-    save_user(user_id)
-
-    try:
-
-        bot.send_chat_action(
-            message.chat.id,
-            "typing"
-        )
-
-        file_info = bot.get_file(
-            message.photo[-1].file_id
-        )
-
-        downloaded_file = bot.download_file(
-            file_info.file_path
-        )
-
-        caption = (
-            message.caption
-            or
-            "እባክህ ይህንን ስክሪንሾት "
-            "አጥንተህ ችግሩን እና "
-            "መፍትሄውን ደረጃ በደረጃ "
-            "አብራርተህ ንገረኝ።"
-        )
-
-        answer = ask_gemini_with_image(
-            user_id,
-            user_name,
-            caption,
-            downloaded_file
-        )
-
-        bot.send_message(
-            message.chat.id,
-            answer
-        )
-
-    except Exception as e:
-
-        print(
-            f"Photo handler error: {e}"
-        )
-
-        try:
-            bot.send_message(
-                message.chat.id,
-                "ውዴ 😅 ፎቶውን ማስተንተን "
-                "ላይ ችግር ተፈጥሯል። "
-                "እንደገና ላኪልኝ ❤️"
-            )
-        except Exception:
-            pass
 
 
 # =========================================================
 # TEXT CHAT
 # =========================================================
 
-@bot.message_handler(
-    func=lambda message: True
-)
-def chat(message):
+def ask_gemini(user_id, message):
 
-    if not message.text:
-        return
+    history = get_history(user_id)
 
-    user_id = message.from_user.id
+    contents = []
 
-    user_name = (
-        message.from_user.first_name
-        or "ማል"
-    )
+    # System instruction
+    contents.append({
+        "role": "user",
+        "parts": [
+            {
+                "text": SYSTEM_PROMPT
+            }
+        ]
+    })
 
-    save_user(user_id)
+    contents.append({
+        "role": "model",
+        "parts": [
+            {
+                "text": "እሺ፣ ሜሉ ነኝ።"
+            }
+        ]
+    })
 
-    try:
+    # Previous conversation
+    for item in history:
 
-        bot.send_chat_action(
-            message.chat.id,
-            "typing"
-        )
+        role = item["role"]
+        text = item["text"]
 
-    except Exception:
-        pass
+        gemini_role = "user"
 
-    # =====================================================
-    # STATS
-    # =====================================================
+        if role == "assistant":
+            gemini_role = "model"
 
-    if (
-        message.text.strip().lower()
-        == "/stats"
-    ):
+        contents.append({
+            "role": gemini_role,
+            "parts": [
+                {
+                    "text": text
+                }
+            ]
+        })
 
-        total_users = len(
-            load_users()
-        )
+    # Current message
+    contents.append({
+        "role": "user",
+        "parts": [
+            {
+                "text": message
+            }
+        ]
+    })
 
-        bot.send_message(
-            message.chat.id,
-            f"📊 አጠቃላይ ተጠቃሚዎች: "
-            f"{total_users} 👥"
-        )
+    payload = {
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": 2000
+        }
+    }
 
-        return
+    return gemini_request(payload, user_id)
 
-    # =====================================================
-    # FILE SEARCH
-    # =====================================================
 
-    text_lower = (
-        message.text.lower()
-    )
+# =========================================================
+# SEND LONG TELEGRAM MESSAGE
+# =========================================================
 
-    keywords = [
-        "ehi",
-        "pkg",
-        "telegram",
-        "vpn",
-        "config",
-        "فايبر",
-        "net"
-    ]
+def send_long_message(chat_id, text):
 
-    if any(
-        kw in text_lower
-        for kw in keywords
-    ):
+    if not text:
+        return False
 
-        saved_files = load_files()
+    # Telegram message limit safety
+    chunk_size = 3500
 
-        if saved_files:
+    chunks = []
 
-            target_file = saved_files[-1]
+    while len(text) > chunk_size:
 
-            for f in reversed(
-                saved_files
-            ):
+        cut = text.rfind("\n", 0, chunk_size)
 
-                if any(
-                    word in f["text"]
-                    for word
-                    in text_lower.split()
-                    if len(word) > 3
-                ):
+        if cut < 500:
+            cut = chunk_size
 
-                    target_file = f
-                    break
+        chunks.append(text[:cut])
+        text = text[cut:].lstrip()
+
+    if text:
+        chunks.append(text)
+
+    for chunk in chunks:
+
+        sent = False
+
+        for attempt in range(3):
 
             try:
 
-                bot.forward_message(
-                    message.chat.id,
-                    target_file["chat_id"],
-                    target_file["message_id"]
+                bot.send_message(
+                    chat_id,
+                    chunk
                 )
 
-                return
+                sent = True
+                break
 
             except Exception as e:
 
                 print(
-                    f"Forward error: {e}"
+                    f"❌ Telegram send error "
+                    f"{attempt + 1}/3: "
+                    f"{type(e).__name__}"
                 )
 
+                time.sleep(2)
+
+        if not sent:
+            return False
+
+    return True
+
+
+# =========================================================
+# /START
+# =========================================================
+
+@bot.message_handler(commands=["start"])
+def start_handler(message):
+
+    welcome = (
+        "ሰላም ❤️ እኔ ሜሉ ነኝ! 🥰\n\n"
+        "እንዴት ነሽ/ነህ? እንደፈለግህ "
+        "ማውራት፣ መጫወት እና መጠየቅ ትችላለህ። 😊"
+    )
+
+    try:
         bot.send_message(
             message.chat.id,
-            "እስካሁን ምንም ፋይል "
-            "አልተገኘም!"
+            welcome
         )
+    except Exception as e:
+        print(f"❌ /start error: {type(e).__name__}")
 
+
+# =========================================================
+# /CLEAR
+# =========================================================
+
+@bot.message_handler(commands=["clear", "reset"])
+def clear_handler(message):
+
+    user_id = message.from_user.id
+
+    with history_lock:
+        user_history[user_id].clear()
+
+    bot.send_message(
+        message.chat.id,
+        "🧹 የውይይታችንን memory አጽድቻለሁ ❤️"
+    )
+
+
+# =========================================================
+# /ID
+# =========================================================
+
+@bot.message_handler(commands=["id"])
+def id_handler(message):
+
+    bot.send_message(
+        message.chat.id,
+        f"🆔 Your Telegram ID:\n{message.from_user.id}"
+    )
+
+
+# =========================================================
+# TEXT HANDLER
+# =========================================================
+
+@bot.message_handler(
+    content_types=["text"],
+    func=lambda message: not message.text.startswith("/")
+)
+def text_handler(message):
+
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    user_text = message.text.strip()
+
+    if not user_text:
         return
 
-    # =====================================================
-    # NORMAL GEMINI CHAT
-    # =====================================================
+    print(
+        f"💬 Message from {user_id}: "
+        f"{user_text[:80]}"
+    )
+
+    # Typing indicator
+    try:
+        bot.send_chat_action(
+            chat_id,
+            "typing"
+        )
+    except Exception:
+        pass
+
+    # Save user message
+    add_history(
+        user_id,
+        "user",
+        user_text
+    )
 
     try:
 
         answer = ask_gemini(
             user_id,
-            user_name,
-            message.text
+            user_text
         )
 
-        bot.send_message(
-            message.chat.id,
+        # Gemini failed
+        if not answer:
+
+            # Remove failed user message from memory
+            with history_lock:
+                if user_history[user_id]:
+                    user_history[user_id].pop()
+
+            print(
+                f"❌ No Gemini response for "
+                f"user {user_id}"
+            )
+
+            bot.send_message(
+                chat_id,
+                "😔 ትንሽ ችግር ተፈጥሯል። "
+                "እንደገና ላኪልኝ ❤️"
+            )
+
+            return
+
+        # Save assistant response
+        add_history(
+            user_id,
+            "assistant",
             answer
+        )
+
+        print(
+            f"📤 Sending Gemini response "
+            f"to {user_id}"
+        )
+
+        # THIS IS IMPORTANT:
+        # Actually send Gemini answer to Telegram
+        send_long_message(
+            chat_id,
+            answer
+        )
+
+        print(
+            f"✅ Response sent to {user_id}"
         )
 
     except Exception as e:
 
         print(
-            f"Chat handler error: {e}"
+            f"❌ TEXT HANDLER ERROR: "
+            f"{type(e).__name__}: {e}"
         )
+
+        try:
+            bot.send_message(
+                chat_id,
+                "😔 አንድ ችግር ተፈጥሯል። "
+                "እንደገና ሞክሪ ❤️"
+            )
+        except Exception:
+            pass
+
+
+# =========================================================
+# PHOTO HANDLER
+# =========================================================
+
+@bot.message_handler(
+    content_types=["photo"]
+)
+def photo_handler(message):
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    try:
+
+        bot.send_chat_action(
+            chat_id,
+            "typing"
+        )
+
+        # Get highest quality photo
+        photo = message.photo[-1]
+
+        file_info = bot.get_file(
+            photo.file_id
+        )
+
+        image_bytes = bot.download_file(
+            file_info.file_path
+        )
+
+        # Convert to base64
+        import base64
+
+        image_base64 = base64.b64encode(
+            image_bytes
+        ).decode("utf-8")
+
+        caption = (
+            message.caption.strip()
+            if message.caption
+            else "ይህን ምስል ተመልከቺና አስረጂልኝ።"
+        )
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": SYSTEM_PROMPT
+                            + "\n\n"
+                            + caption
+                        },
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": image_base64
+                            }
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 2000
+            }
+        }
+
+        answer = gemini_request(
+            payload,
+            user_id
+        )
+
+        if answer:
+
+            send_long_message(
+                chat_id,
+                answer
+            )
+
+        else:
+
+            bot.send_message(
+                chat_id,
+                "😔 ምስሉን ማየት አልቻልኩም። "
+                "እንደገና ላኪልኝ።"
+            )
+
+    except Exception as e:
+
+        print(
+            f"❌ PHOTO HANDLER ERROR: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        try:
+            bot.send_message(
+                chat_id,
+                "😔 ምስሉን ለመመልከት "
+                "ችግር ተፈጥሯል።"
+            )
+        except Exception:
+            pass
+
+
+# =========================================================
+# ERROR HANDLER
+# =========================================================
+
+def polling_loop():
+
+    while True:
+
+        try:
+
+            print("🔌 Connecting to Telegram...")
+
+            bot.infinity_polling(
+                timeout=60,
+                long_polling_timeout=30,
+                skip_pending=False,
+                allowed_updates=[
+                    "message"
+                ]
+            )
+
+        except Exception as e:
+
+            print(
+                f"🚨 TELEGRAM POLLING ERROR: "
+                f"{type(e).__name__}: {e}"
+            )
+
+            print("🔄 Restarting polling in 5 seconds...")
+
+            time.sleep(5)
 
 
 # =========================================================
 # START
 # =========================================================
 
-print("=" * 55)
-print("🤖 MELU BOT")
-print("=" * 55)
-print(
-    f"🔑 Gemini API Keys Loaded: "
-    f"{len(GEMINI_API_KEYS)}"
-)
-print(
-    "🔄 API KEY ROTATION: ENABLED"
-)
-print(
-    "♻️ 401 BAD KEYS: AUTO SKIP"
-)
-print(
-    "🔁 429/5xx: AUTO RETRY"
-)
-print("=" * 55)
+if __name__ == "__main__":
 
+    print("🚀 Starting MELU...")
 
-# =========================================================
-# INFINITE TELEGRAM POLLING
-# =========================================================
-
-while True:
-
-    try:
-
-        print(
-            "🚀 MELU BOT STARTED"
-        )
-
-        bot.infinity_polling(
-            timeout=60,
-            long_polling_timeout=30,
-            skip_pending=True
-        )
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Telegram polling error: {e}"
-        )
-
-        print(
-            "🔄 Restarting polling in 5 seconds..."
-        )
-
-        time.sleep(5)
+    polling_loop()
