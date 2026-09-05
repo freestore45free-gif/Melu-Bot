@@ -115,12 +115,12 @@ def ask_gemini(user_id, user_name, text):
         if not api_key:
             break
         
-        # AQ ቶከኖች በትክክል በ Bearer Header እና gemini-1.5-flash ሞዴል
+        # ጉግል በሎጉ ላይ እንዳዘዘው gemini-3.6-flash ሞዴልን መጠቀም
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=20)
@@ -175,7 +175,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Bearer Token & Gemini 1.5 Flash)")
+print("🤖 MELU BOT STARTED (Gemini 3.6 Flash Fixed)")
 print("=" * 45)
 
 while True:
