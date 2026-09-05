@@ -113,8 +113,9 @@ def ask_gemini(user_id, user_name, text):
             break
         try:
             client = genai.Client(api_key=api_key)
+            # አሁን ባለው ሰርቨር ሙሉ በሙሉ የሚሰራው የ 3.7 ፍላሽ ሞዴል
             response = client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-3.7-flash',
                 contents=f"{system_instruction}\n\nጥያቄ:{text}"
             )
             if response and response.text:
@@ -163,7 +164,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Official SDK & Gemini 1.5 Flash)")
+print("🤖 MELU BOT STARTED (Gemini 3.7 Flash Final)")
 print("=" * 45)
 
 while True:
