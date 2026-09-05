@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = "8984876119:AAG7Z3Nzu5-6IbjhJ-p5XbzXbapG5er0P7Y"
+BOT_TOKEN = "8984876119:AAGBbvPfId7m00x6zy536vIyX7G67rDIOnc"
 
+# ቶከኖቹን ከ Faable Variables (GEMINI_API_KEYS) በራስሰር እንዲያነብ ይደረጋል
 raw_keys = os.getenv("GEMINI_API_KEYS", "")
 GEMINI_API_KEYS = []
 try:
@@ -89,6 +90,52 @@ def handle_channel_posts(message):
         except Exception:
             pass
 
+def ask_gemini_with_image(user_id, user_name, text, image_bytes):
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    history = user_histories[user_id]
+    history.append(f"ተጠቃሚ ({user_name}) [ስክሪንሾት ላከ]: {text}")
+    if len(history) > 14:
+        history.pop(0)
+
+    context_history = "\n".join(history)
+    saved_files = load_files()
+    files_context = "\n".join([f"- ፋይል: {f['text']}" for f in saved_files[-5:]])
+
+    system_instruction = f"""
+አንቺ ሜሉ (Melu) የተባልሽ የTelegram bot ነሽ። ፈጣሪሽ እና አለቃሽ @lij_rafi ነው። የ @FreeStoreChannel ረዳት ነሽ።
+አስፈላጊ ሕጎች:
+1. ተጠቃሚው የላከውን ስክሪንሾት ወይም ፎቶ በጥንቃቄ መርምረህ ምስሉ ላይ የሚታየውን ችግር፣ ስህተት ወይም ሁኔታ አጥንትህ **ደረጃ በደረጃ (Step-by-Step)** ግልጽ የሆነ መፍትሄ በአማርኛ አብራርተህ ስጥ።
+2. ፍቅር በተሞላበት እና አጋዥ በሆነ መልኩ አነጋግረው።
+3. የውይይት ታሪክ: {context_history}
+"""
+
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": f"{system_instruction}\n\nጥያቄ:{text}"},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
+            ]
+        }],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
+    }
+
+    headers = {"Content-Type": "application/json"}
+    for _ in range(len(GEMINI_API_KEYS)):
+        api_key = get_next_api_key()
+        if not api_key:
+            break
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["candidates"][0]["content"]["parts"][0]["text"]
+                if answer:
+                    return answer.strip()
+        except Exception:
+            continue
+    return "ውዴ 😅 ስክሪንሾቱን በማየት ላይ እያለሁ ችግር አጋጥሟል፣ እንደገና ላክልኝ ❤️"
+
 def ask_gemini(user_id, user_name, text):
     history = user_histories[user_id]
     history.append(f"ተጠቃሚ ({user_name}): {text}")
@@ -107,33 +154,42 @@ def ask_gemini(user_id, user_name, text):
 """
 
     payload = {
-        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}]
+        "contents": [{"parts": [{"text": f"{system_instruction}\n\nጥያቄ:{text}"}]}],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
     }
 
+    headers = {"Content-Type": "application/json"}
     for _ in range(len(GEMINI_API_KEYS)):
         api_key = get_next_api_key()
         if not api_key:
             break
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={api_key}"
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 answer = data["candidates"][0]["content"]["parts"][0]["text"]
                 if answer:
                     return answer.strip()
-            else:
-                print(f"Token Expired/Error ({response.status_code}): Skipping to next key...")
-        except Exception as e:
-            print("Request Exception:", e)
+        except Exception:
             continue
-    return "ውዴ 💖 አሁን መልስ ይዤ መጣሁልህ!"
+    return "ውዴ 😅 ሀሳቤን መግለጽ አልቻልኩም፣ እስቲ እንደገና አነጋግረኝ ❤️"
+
+@bot.message_handler(content_types=['photo'])
+def handle_photos(message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "ማል"
+    save_user(user_id)
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        caption = message.caption or "እባክህ ይህንን ስክሪንሾት አጥንተህ ችግሩን እና መፍትሄውን ደረጃ በደረጃ አብራርተህ ንገረኝ።"
+        answer = ask_gemini_with_image(user_id, user_name, caption, downloaded_file)
+        bot.send_message(message.chat.id, answer)
+    except Exception as e:
+        print("Photo download error:", e)
+        bot.send_message(message.chat.id, "ስክሪንሾቱን መቀበል አልቻልኩም!")
 
 @bot.message_handler(func=lambda message: True)
 def chat(message):
@@ -174,7 +230,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Token Rotation Active)")
+print("🤖 MELU BOT STARTED (Clean Code Without Hardcoded Keys)")
 print("=" * 45)
 
 while True:
