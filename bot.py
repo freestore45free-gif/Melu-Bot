@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = "8984876119:AAGBbvPfId7m00x6zy536vIyX7G67rDIOnc"
+BOT_TOKEN = "8984876119:AAG7Z3Nzu5-6IbjhJ-p5XbzXbapG5er0P7Y"
 
 # ቶከኖቹን ከ Faable Variables (GEMINI_API_KEYS) በራስሰር እንዲያነብ ይደረጋል
 raw_keys = os.getenv("GEMINI_API_KEYS", "")
