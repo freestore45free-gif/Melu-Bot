@@ -115,7 +115,6 @@ def ask_gemini(user_id, user_name, text):
         if not api_key:
             break
         
-        # የ AQ ቶከኖች በትክክል በ Bearer Header ብቻ የሚሠሩበት ዩአርኤል (ያለ ?key=)
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -130,7 +129,7 @@ def ask_gemini(user_id, user_name, text):
                 if answer:
                     return answer.strip()
             else:
-                print(f"Gemini API Error ({response.status_code}):", response.text)
+                print(f"Token Expired/Error ({response.status_code}): Skipping to next key...")
         except Exception as e:
             print("Request Exception:", e)
             continue
@@ -175,7 +174,7 @@ def chat(message):
         print("Chat handler error:", e)
 
 print("=" * 45)
-print("🤖 MELU BOT STARTED (Bearer Auth Fixed)")
+print("🤖 MELU BOT STARTED (Token Rotation Active)")
 print("=" * 45)
 
 while True:
